@@ -1,4 +1,45 @@
-<% layout('layout') -%>  <div class="grid grid-cols-2 md:hidden gap-3 mb-6">
+<% layout('layout', {title: 'Dashboard', active: 'dashboard'}) %>
+
+<div class="p-6 pt-4">
+
+  <% if (user.is_expired) { %>
+  <div class="bg-red-500/10 border border-red-500/20 rounded-lg p-4 mb-6">
+    <div class="flex items-center gap-3">
+      <i class="ti ti-alert-circle text-red-500 text-xl"></i>
+      <div>
+        <h3 class="text-red-500 font-medium">Subscription Expired</h3>
+        <p class="text-gray-400 text-sm mt-1">Your subscription has expired. Please renew to continue streaming.</p>
+      </div>
+    </div>
+  </div>
+  <% } else if (user.expires_soon) { %>
+  <div class="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-4 mb-6">
+    <div class="flex items-center gap-3">
+      <i class="ti ti-alert-triangle text-yellow-500 text-xl"></i>
+      <div>
+        <h3 class="text-yellow-500 font-medium">Subscription Expiring Soon</h3>
+        <p class="text-gray-400 text-sm mt-1">Your subscription will expire in <%= user.days_until_expiry %> day<%= user.days_until_expiry !== 1 ? 's' : '' %>. Please renew to avoid service interruption.</p>
+      </div>
+      <div class="ml-auto">
+        <a href="https://wa.me/6285600000000" class="bg-yellow-500 hover:bg-yellow-600 text-dark-800 px-4 py-2 rounded-lg transition-colors inline-block text-sm">
+          Contact Admin
+        </a>
+      </div>
+    </div>
+  </div>
+  <% } %>
+
+  <div class="flex flex-col md:flex-row items-start md:items-center justify-between mb-6">
+    <h1 class="text-2xl font-bold">Dashboard</h1>
+    <div class="flex items-center gap-2 mt-4 md:mt-0">
+      <div class="flex items-center gap-2">
+        <div class="w-2 h-2 rounded-full bg-green-500"></div>
+        <span class="text-sm text-gray-300">Online</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-2 md:hidden gap-3 mb-6">
     <div class="bg-gray-800 rounded-lg p-4 shadow-md">
       <div class="flex items-center justify-between mb-2">
         <h3 class="text-sm font-semibold">Active Streams</h3>
@@ -133,11 +174,24 @@
             class="w-full bg-dark-700 border border-gray-600 text-white pl-9 pr-4 py-2 rounded-lg focus:outline-none focus:ring-1 focus:ring-primary">
           <i class="ti ti-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"></i>
         </div>
-        <button onclick="openNewStreamModal()"
+        <% if (user.is_expired === true) { %>
+        <!-- Disabled New Stream button for expired users -->
+        <button 
+          id="expiredStreamButton"
+          class="w-full sm:w-auto flex items-center justify-center gap-2 bg-gray-600 text-gray-400 px-4 py-2 rounded-lg cursor-not-allowed opacity-70"
+          disabled
+          title="Your subscription has expired. Please renew to create new streams.">
+          <i class="ti ti-plus"></i>
+          <span>New Stream</span>
+        </button>
+        <% } else { %>
+        <!-- Active New Stream button for active users -->
+        <button id="newStreamButton"
           class="w-full sm:w-auto flex items-center justify-center gap-2 bg-primary hover:bg-blue-600 text-white px-4 py-2 rounded-lg transition-colors">
           <i class="ti ti-plus"></i>
           <span>New Stream</span>
         </button>
+        <% } %>
       </div>
     </div>
     <div class="block md:hidden space-y-4">
@@ -2113,3 +2167,77 @@
       }
     });
   </script>
+
+  <!-- Renewal Modal -->
+  <div id="renewalModal" class="fixed inset-0 bg-black/60 z-[60] hidden items-center justify-center p-4">
+    <div class="bg-dark-800 rounded-lg shadow-xl w-full max-w-md">
+      <div class="flex items-center justify-between p-4 border-b border-gray-700">
+        <h3 class="text-lg font-medium text-white">Renew Subscription</h3>
+        <button onclick="closeRenewalModal()" class="text-gray-400 hover:text-white">
+          <i class="ti ti-x"></i>
+        </button>
+      </div>
+      <div class="p-4">
+        <p class="text-gray-300 mb-4">Your subscription has expired. Please contact the administrator to renew your subscription.</p>
+        <div class="flex justify-end gap-3">
+          <button onclick="closeRenewalModal()" class="px-4 py-2 text-gray-300 hover:text-white">
+            Close
+          </button>
+          <a href="https://wa.me/6285600000000" class="bg-primary hover:bg-secondary text-white px-4 py-2 rounded-lg transition-colors">
+            Contact Admin
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  function showRenewalModal() {
+    const modal = document.getElementById('renewalModal');
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+  }
+
+  function closeRenewalModal() {
+    const modal = document.getElementById('renewalModal');
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+  }
+  </script>
+
+  <script>
+    // Set user expired status in window object for JavaScript access
+    window.userIsExpired = <%= user.is_expired === true ? 'true' : 'false' %>;
+    
+    console.log("Dashboard loaded. User expired status:", window.userIsExpired);
+    console.log("User object:", <%= JSON.stringify(user) %>);
+    
+    // If user is expired, show warning notification
+    document.addEventListener('DOMContentLoaded', function() {
+      if (window.userIsExpired === true) {
+        console.log("Creating expired notification");
+        // Create and show an expiration notification
+        const notification = document.createElement('div');
+        notification.className = 'fixed top-20 right-4 bg-red-500 text-white p-4 rounded-lg shadow-lg z-50 flex items-center';
+        notification.innerHTML = `
+          <i class="ti ti-alert-triangle mr-2"></i>
+          <div>
+            <p class="font-medium">Subscription Expired</p>
+            <p class="text-sm">Your subscription has expired. Please renew to continue streaming.</p>
+          </div>
+          <button class="ml-4 text-white hover:text-gray-200" onclick="this.parentNode.remove()">
+            <i class="ti ti-x"></i>
+          </button>
+        `;
+        document.body.appendChild(notification);
+        
+        // Auto-remove after 10 seconds
+        setTimeout(() => {
+          if (notification.parentNode) {
+            notification.remove();
+          }
+        }, 10000);
+      }
+    });
+  </script>
+</div>

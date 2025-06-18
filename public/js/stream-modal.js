@@ -1,5 +1,5 @@
 /*
- * StreamFlow v2.0 - Live Streaming Lewat VPS
+ * LiveNoRibet v2.0 - Live Streaming Lewat VPS
  * 
  * Custom Features & UI Components
  * Created by: Bang Tutorial
@@ -17,7 +17,222 @@ let mobileVideoPlayer = null;
 let streamKeyTimeout = null;
 let isStreamKeyValid = true;
 let currentPlatform = 'Custom';
+
+// Add document ready event listener
+document.addEventListener('DOMContentLoaded', function() {
+  // Initialize expired stream button event listener
+  const expiredButton = document.getElementById('expiredStreamButton');
+  if (expiredButton) {
+    expiredButton.addEventListener('click', function(e) {
+      e.preventDefault();
+      showRenewalModal();
+    });
+  }
+  
+  // Initialize new stream button
+  const newStreamButton = document.getElementById('newStreamButton');
+  if (newStreamButton) {
+    // Check stream status first
+    checkStreamStatus();
+    
+    // Add click event listener
+    newStreamButton.addEventListener('click', function(e) {
+      e.preventDefault();
+      openNewStreamModal();
+    });
+  }
+  
+  // Check stream status every 30 seconds
+  setInterval(checkStreamStatus, 30000);
+});
+
+// Function to check stream status
+function checkStreamStatus() {
+  const newStreamButton = document.getElementById('newStreamButton');
+  if (!newStreamButton) return;
+  
+  fetch('/api/user/stream-status')
+    .then(response => response.json())
+    .then(data => {
+      if (data.success) {
+        const { activeStreams, maxStreams, reachedLimit, isExpired } = data.data;
+        
+        // Update button state
+        if (reachedLimit) {
+          // Disable button if reached max streams
+          newStreamButton.disabled = true;
+          newStreamButton.classList.remove('bg-primary', 'hover:bg-blue-600');
+          newStreamButton.classList.add('bg-gray-600', 'text-gray-400', 'cursor-not-allowed', 'opacity-70');
+          newStreamButton.title = `You have reached the maximum number of active streams (${maxStreams})`;
+          
+          // Update click handler
+          newStreamButton.onclick = function(e) {
+            e.preventDefault();
+            showMaxStreamsModal(activeStreams, maxStreams);
+          };
+        } else if (isExpired) {
+          // Disable button if user is expired
+          newStreamButton.disabled = true;
+          newStreamButton.classList.remove('bg-primary', 'hover:bg-blue-600');
+          newStreamButton.classList.add('bg-gray-600', 'text-gray-400', 'cursor-not-allowed', 'opacity-70');
+          newStreamButton.title = 'Your subscription has expired. Please renew to create new streams.';
+          
+          // Update click handler
+          newStreamButton.onclick = function(e) {
+            e.preventDefault();
+            showRenewalModal();
+          };
+        } else {
+          // Enable button
+          newStreamButton.disabled = false;
+          newStreamButton.classList.remove('bg-gray-600', 'text-gray-400', 'cursor-not-allowed', 'opacity-70');
+          newStreamButton.classList.add('bg-primary', 'hover:bg-blue-600');
+          newStreamButton.title = 'Create a new stream';
+          
+          // Update click handler
+          newStreamButton.onclick = function(e) {
+            e.preventDefault();
+            openNewStreamModal();
+          };
+        }
+      }
+    })
+    .catch(error => {
+      console.error('Error checking stream status:', error);
+    });
+}
+
+// Function to show max streams modal
+function showMaxStreamsModal(activeStreams, maxStreams) {
+  const modal = document.getElementById('maxStreamsModal') || createMaxStreamsModal(activeStreams, maxStreams);
+  document.body.style.overflow = 'hidden';
+  modal.classList.remove('hidden');
+  requestAnimationFrame(() => {
+    modal.classList.add('active');
+  });
+}
+
+// Helper function to create max streams modal
+function createMaxStreamsModal(activeStreams, maxStreams) {
+  const modalHTML = `
+    <div id="maxStreamsModal" class="fixed inset-0 bg-black/50 z-50 hidden modal-overlay overflow-y-auto">
+      <div class="flex min-h-screen items-center justify-center p-4">
+        <div class="bg-dark-800 rounded-lg shadow-xl w-full max-w-md modal-container">
+          <div class="flex items-center justify-between p-4 sm:px-6 sm:py-6 border-b border-gray-700">
+            <h3 class="text-lg font-semibold text-yellow-400">Maximum Streams Reached</h3>
+            <button onclick="closeMaxStreamsModal()" class="text-gray-400 hover:text-white">
+              <i class="ti ti-x text-xl"></i>
+            </button>
+          </div>
+          <div class="p-6">
+            <div class="flex flex-col items-center mb-6">
+              <div class="w-16 h-16 rounded-full bg-yellow-500/10 flex items-center justify-center mb-4">
+                <i class="ti ti-alert-triangle text-yellow-500 text-3xl"></i>
+              </div>
+              <h4 class="text-lg font-medium text-white mb-2">Stream Limit Reached</h4>
+              <p class="text-gray-400 text-center">You have reached the maximum number of active streams (${activeStreams}/${maxStreams}). Please stop an active stream before creating a new one.</p>
+            </div>
+            <div class="space-y-4">
+              <a href="/dashboard" class="w-full flex items-center justify-center gap-2 bg-primary hover:bg-blue-600 text-white px-4 py-3 rounded-lg transition-colors">
+                <i class="ti ti-list"></i>
+                <span>Manage Active Streams</span>
+              </a>
+              <button onclick="closeMaxStreamsModal()" class="w-full flex items-center justify-center gap-2 bg-dark-700 hover:bg-dark-600 text-white px-4 py-3 rounded-lg transition-colors">
+                <span>Cancel</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  // Append modal to body
+  document.body.insertAdjacentHTML('beforeend', modalHTML);
+  return document.getElementById('maxStreamsModal');
+}
+
+// Function to close max streams modal
+function closeMaxStreamsModal() {
+  const modal = document.getElementById('maxStreamsModal');
+  if (modal) {
+    document.body.style.overflow = 'auto';
+    modal.classList.remove('active');
+    setTimeout(() => {
+      modal.classList.add('hidden');
+    }, 200);
+  }
+}
+
+// Function to show renewal modal for expired users
+function showRenewalModal() {
+  const modal = document.getElementById('renewalModal') || createRenewalModal();
+  document.body.style.overflow = 'hidden';
+  modal.classList.remove('hidden');
+  requestAnimationFrame(() => {
+    modal.classList.add('active');
+  });
+}
+
+// Helper function to create renewal modal if it doesn't exist
+function createRenewalModal() {
+  const modalHTML = `
+    <div id="renewalModal" class="fixed inset-0 bg-black/50 z-50 hidden modal-overlay overflow-y-auto">
+      <div class="flex min-h-screen items-center justify-center p-4">
+        <div class="bg-dark-800 rounded-lg shadow-xl w-full max-w-md modal-container">
+          <div class="flex items-center justify-between p-4 sm:px-6 sm:py-6 border-b border-gray-700">
+            <h3 class="text-lg font-semibold text-red-400">Subscription Expired</h3>
+            <button onclick="closeRenewalModal()" class="text-gray-400 hover:text-white">
+              <i class="ti ti-x text-xl"></i>
+            </button>
+          </div>
+          <div class="p-6">
+            <div class="flex flex-col items-center mb-6">
+              <div class="w-16 h-16 rounded-full bg-red-500/10 flex items-center justify-center mb-4">
+                <i class="ti ti-alert-circle text-red-500 text-3xl"></i>
+              </div>
+              <h4 class="text-lg font-medium text-white mb-2">Your subscription has expired</h4>
+              <p class="text-gray-400 text-center">You need to renew your subscription to create new streams.</p>
+            </div>
+            <div class="space-y-4">
+              <a href="https://wa.me/6285600000000" target="_blank" class="w-full flex items-center justify-center gap-2 bg-primary hover:bg-blue-600 text-white px-4 py-3 rounded-lg transition-colors">
+                <i class="ti ti-brand-whatsapp"></i>
+                <span>Contact Admin to Renew</span>
+              </a>
+              <button onclick="closeRenewalModal()" class="w-full flex items-center justify-center gap-2 bg-dark-700 hover:bg-dark-600 text-white px-4 py-3 rounded-lg transition-colors">
+                <span>Cancel</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  // Append modal to body
+  document.body.insertAdjacentHTML('beforeend', modalHTML);
+  return document.getElementById('renewalModal');
+}
+
+// Function to close renewal modal
+function closeRenewalModal() {
+  const modal = document.getElementById('renewalModal');
+  if (modal) {
+    document.body.style.overflow = 'auto';
+    modal.classList.remove('active');
+    setTimeout(() => {
+      modal.classList.add('hidden');
+    }, 200);
+  }
+}
+
 function openNewStreamModal() {
+  // Check if user is expired (this will be set in the window object by the server)
+  if (window.userIsExpired === true) {
+    showRenewalModal();
+    return;
+  }
+  
   const modal = document.getElementById('newStreamModal');
   document.body.style.overflow = 'hidden';
   modal.classList.remove('hidden');

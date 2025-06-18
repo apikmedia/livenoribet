@@ -204,6 +204,22 @@ class Stream {
       );
     });
   }
+  static countActiveByUserId(userId) {
+    return new Promise((resolve, reject) => {
+      db.get(
+        `SELECT COUNT(*) as count FROM streams 
+         WHERE user_id = ? AND status = 'live'`,
+        [userId],
+        (err, row) => {
+          if (err) {
+            console.error('Error counting active streams:', err.message);
+            return reject(err);
+          }
+          resolve(row ? row.count : 0);
+        }
+      );
+    });
+  }
   static async isStreamKeyInUse(streamKey, userId, excludeId = null) {
     return new Promise((resolve, reject) => {
       let query = 'SELECT COUNT(*) as count FROM streams WHERE stream_key = ? AND user_id = ?';
@@ -217,14 +233,45 @@ class Stream {
           console.error('Error checking stream key:', err.message);
           return reject(err);
         }
-        resolve(row.count > 0);
+        resolve(row && row.count > 0);
       });
+    });
+  }
+  static async addToHistory(streamId, userId) {
+    const stream = await this.findById(streamId);
+    if (!stream) {
+      throw new Error('Stream not found');
+    }
+
+    return new Promise((resolve, reject) => {
+      db.run(
+        `INSERT INTO stream_history (
+          id, stream_id, user_id, video_id, title, platform, start_time
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          uuidv4(),
+          streamId,
+          userId,
+          stream.video_id,
+          stream.title,
+          stream.platform,
+          new Date().toISOString()
+        ],
+        function (err) {
+          if (err) {
+            console.error('Error adding stream to history:', err);
+            return reject(err);
+          }
+          resolve({ success: true });
+        }
+      );
     });
   }
   static findScheduledInRange(startTime, endTime) {
     return new Promise((resolve, reject) => {
-      const startTimeStr = startTime.toISOString();
-      const endTimeStr = endTime.toISOString();
+      const startTimeStr = typeof startTime === 'string' ? startTime : startTime.toISOString();
+      const endTimeStr = typeof endTime === 'string' ? endTime : endTime.toISOString();
+      
       const query = `
         SELECT s.*, 
                v.title AS video_title, 
@@ -241,6 +288,7 @@ class Stream {
         AND s.schedule_time >= ?
         AND s.schedule_time <= ?
       `;
+      
       db.all(query, [startTimeStr, endTimeStr], (err, rows) => {
         if (err) {
           console.error('Error finding scheduled streams:', err.message);
@@ -255,6 +303,26 @@ class Stream {
         resolve(rows || []);
       });
     });
+  }
+  static async startStream(id, userId) {
+    try {
+      // Periksa apakah stream ada dan milik user
+      const stream = await this.findById(id);
+      if (!stream || stream.user_id !== userId) {
+        throw new Error('Stream not found or not authorized');
+      }
+
+      // Update status stream menjadi live
+      const result = await this.updateStatus(id, 'live', userId);
+      
+      // Tambahkan entri di stream_history
+      await this.addToHistory(id, userId);
+      
+      return result;
+    } catch (error) {
+      console.error('Error starting stream:', error);
+      throw error;
+    }
   }
 }
 module.exports = Stream;

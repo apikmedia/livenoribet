@@ -24,6 +24,12 @@ const ffmpeg = require('fluent-ffmpeg');
 const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
 const streamingService = require('./services/streamingService');
 const schedulerService = require('./services/schedulerService');
+const adminRoutes = require('./routes/admin');
+const checkSubscription = require('./middleware/check-subscription');
+const isAuthenticated = require('./middleware/isAuthenticated');
+const Tokens = require('csrf');
+const tokens = new Tokens();
+const streamRoutes = require('./routes/stream');
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 process.on('unhandledRejection', (reason, promise) => {
   console.error('-----------------------------------');
@@ -39,9 +45,6 @@ process.on('uncaughtException', (error) => {
 const app = express();
 app.set("trust proxy", 1);
 const port = process.env.PORT || 7575;
-const tokens = new csrf();
-ensureDirectories();
-ensureDirectories();
 app.locals.helpers = {
   getUsername: function (req) {
     if (req.session && req.session.username) {
@@ -111,7 +114,7 @@ app.use(session({
     dir: './db/',
     table: 'sessions'
   }),
-  secret: process.env.SESSION_SECRET,
+      secret: process.env.SESSION_SECRET || 'livenoriber_secret_123',
   resave: false,
   saveUninitialized: false,
   cookie: {
@@ -121,25 +124,42 @@ app.use(session({
   }
 }));
 app.use(async (req, res, next) => {
-  if (req.session && req.session.userId) {
+  res.locals.user = null;
+  
+  if (req.session.userId) {
     try {
       const user = await User.findById(req.session.userId);
       if (user) {
-        req.session.username = user.username;
-        req.session.avatar_path = user.avatar_path;
-        if (user.email) req.session.email = user.email;
-        res.locals.user = {
-          id: user.id,
-          username: user.username,
-          avatar_path: user.avatar_path,
-          email: user.email
-        };
+        // Check subscription expiry
+        const now = new Date();
+        const expiryDate = new Date(user.subscription_expired_at);
+        const isExpired = now > expiryDate;
+        
+        // Log user expiration status for debugging
+        console.log(`User ${user.username} (${user.id}): Expiry date: ${expiryDate.toISOString()}, Current date: ${now.toISOString()}, Is expired: ${isExpired}`);
+        
+        // Set is_expired property directly on user object
+        user.is_expired = isExpired;
+        
+        // Calculate days until expiry
+        const msPerDay = 1000 * 60 * 60 * 24;
+        const daysUntilExpiry = Math.floor((expiryDate - now) / msPerDay);
+        
+        // Set expires_soon property
+        user.expires_soon = !isExpired && daysUntilExpiry <= 7;
+        user.days_until_expiry = isExpired ? 0 : daysUntilExpiry;
+        
+        res.locals.user = user;
+        // Update session dengan data user terbaru
+        req.session.user = user;
       }
-    } catch (error) {
-      console.error('Error loading user:', error);
+    } catch (err) {
+      console.error('Error loading user:', err);
     }
   }
+  
   res.locals.req = req;
+  res.locals.title = 'LiveNoRibet';
   next();
 });
 app.use(function (req, res, next) {
@@ -149,6 +169,24 @@ app.use(function (req, res, next) {
   res.locals.csrfToken = tokens.create(req.session.csrfSecret);
   next();
 });
+app.use((req, res, next) => {
+  res.locals.user = req.session.user;
+  res.locals.title = 'LiveNoRibet';
+  next();
+});
+
+// Middleware untuk set default title
+app.use((req, res, next) => {
+  // Set default title jika tidak ada
+  const originalRender = res.render;
+  res.render = function(view, options, callback) {
+    options = options || {};
+    options.title = options.title || 'LiveNoRibet';
+    originalRender.call(this, view, options, callback);
+  };
+  next();
+});
+
 app.engine('ejs', engine);
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
@@ -161,6 +199,8 @@ app.use('/uploads', function (req, res, next) {
 });
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
+// Apply checkSubscription middleware to all routes
+app.use(checkSubscription);
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
     const dir = './public/uploads/avatars';
@@ -226,33 +266,6 @@ const csrfProtection = function (req, res, next) {
   }
   next();
 };
-const isAuthenticated = (req, res, next) => {
-  if (req.session.userId) {
-    return next();
-  }
-  res.redirect('/login');
-};
-app.use('/uploads', function (req, res, next) {
-  res.header('Cache-Control', 'no-cache');
-  res.header('Pragma', 'no-cache');
-  res.header('Expires', '0');
-  next();
-});
-app.use('/uploads/avatars', (req, res, next) => {
-  const file = path.join(__dirname, 'public', 'uploads', 'avatars', path.basename(req.path));
-  if (fs.existsSync(file)) {
-    const ext = path.extname(file).toLowerCase();
-    let contentType = 'application/octet-stream';
-    if (ext === '.jpg' || ext === '.jpeg') contentType = 'image/jpeg';
-    else if (ext === '.png') contentType = 'image/png';
-    else if (ext === '.gif') contentType = 'image/gif';
-    res.header('Content-Type', contentType);
-    res.header('Cache-Control', 'max-age=60, must-revalidate');
-    fs.createReadStream(file).pipe(res);
-  } else {
-    next();
-  }
-});
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
@@ -312,6 +325,7 @@ app.post('/login', loginDelayMiddleware, loginLimiter, async (req, res) => {
     }
     req.session.userId = user.id;
     req.session.username = user.username;
+    req.session.user = user;
     res.redirect('/dashboard');
   } catch (error) {
     console.error('Login error:', error);
@@ -395,6 +409,7 @@ app.post('/setup-account', upload.single('avatar'), [
         });
         req.session.userId = userId;
         req.session.username = req.body.username;
+        req.session.user = await User.findById(userId);
         if (avatarPath) {
           req.session.avatar_path = avatarPath;
         }
@@ -414,6 +429,7 @@ app.post('/setup-account', upload.single('avatar'), [
         avatar_path: avatarPath,
       });
       req.session.username = req.body.username;
+      req.session.user = await User.findById(req.session.userId);
       if (avatarPath) {
         req.session.avatar_path = avatarPath;
       }
@@ -431,13 +447,18 @@ app.post('/setup-account', upload.single('avatar'), [
 app.get('/', (req, res) => {
   res.redirect('/dashboard');
 });
-app.get('/dashboard', isAuthenticated, async (req, res) => {
+app.get('/dashboard', isAuthenticated, checkSubscription, async (req, res) => {
   try {
+    // Tampilkan pesan error jika ada
+    const errorMessage = req.session.errorMessage;
+    req.session.errorMessage = null;
+    
     const user = await User.findById(req.session.userId);
     res.render('dashboard', {
       title: 'Dashboard',
       active: 'dashboard',
-      user: user
+      user: user,
+      errorMessage: errorMessage
     });
   } catch (error) {
     console.error('Dashboard error:', error);
@@ -1187,6 +1208,21 @@ app.post('/api/streams', isAuthenticated, [
     if (!errors.isEmpty()) {
       return res.status(400).json({ success: false, error: errors.array()[0].msg });
     }
+    
+    // Check max_streams limit
+    const user = await User.findById(req.session.userId);
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+    
+    const activeStreams = await Stream.countActiveByUserId(req.session.userId);
+    if (activeStreams >= user.max_streams) {
+      return res.status(400).json({
+        success: false,
+        error: `You have reached the maximum number of active streams (${user.max_streams}). Please stop an active stream before creating a new one.`
+      });
+    }
+    
     const isInUse = await Stream.isStreamKeyInUse(req.body.streamKey, req.session.userId);
     if (isInUse) {
       return res.status(400).json({
@@ -1365,6 +1401,20 @@ app.post('/api/streams/:id/status', isAuthenticated, [
           stream
         });
       }
+      
+      // Check max_streams limit before starting stream
+      const user = await User.findById(req.session.userId);
+      if (!user) {
+        return res.status(404).json({ success: false, error: 'User not found' });
+      }
+      
+      const activeStreams = await Stream.countActiveByUserId(req.session.userId);
+      if (activeStreams >= user.max_streams) {
+        return res.status(400).json({
+          success: false,
+          error: `You have reached the maximum number of active streams (${user.max_streams}). Please stop an active stream before starting a new one.`
+        });
+      }
       const result = await streamingService.startStream(streamId);
       if (result.success) {
         const updatedStream = await Stream.getStreamWithVideo(streamId);
@@ -1481,9 +1531,49 @@ app.get('/api/server-time', (req, res) => {
     formattedTime: formattedTime
   });
 });
+app.use('/admin', isAuthenticated, checkSubscription, adminRoutes);
+app.use('/stream', streamRoutes);
+
+// API untuk mengecek status stream user
+app.get('/api/user/stream-status', isAuthenticated, async (req, res) => {
+  try {
+    const userId = req.session.userId;
+    const user = await User.findById(userId);
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+    
+    // Hitung jumlah stream aktif
+    const activeStreams = await Stream.countActiveByUserId(userId);
+    
+    // Cek apakah user sudah mencapai batas maksimal stream
+    const reachedMaxStreams = activeStreams >= user.max_streams;
+    
+    res.json({
+      success: true,
+      data: {
+        activeStreams: activeStreams,
+        maxStreams: user.max_streams,
+        reachedLimit: reachedMaxStreams,
+        isExpired: req.session.user.is_expired === true
+      }
+    });
+  } catch (error) {
+    console.error('Error checking stream status:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to check stream status'
+    });
+  }
+});
+
 app.listen(port, '0.0.0.0', async () => {
   const ipAddresses = getLocalIpAddresses();
-  console.log(`StreamFlow running at:`);
+      console.log(`LiveNoRibet running at:`);
   if (ipAddresses && ipAddresses.length > 0) {
     ipAddresses.forEach(ip => {
       console.log(`  http://${ip}:${port}`);
@@ -1508,4 +1598,101 @@ app.listen(port, '0.0.0.0', async () => {
   } catch (error) {
     console.error('Failed to sync stream statuses:', error);
   }
+  
+  // Schedule daily check for expired users at midnight
+  scheduleExpiredStreamCheck();
 });
+
+// Function to check and stop streams for expired users
+async function stopAllStreamsForExpiredUsers() {
+  try {
+    // Get today's date in YYYY-MM-DD format
+    const today = new Date().toISOString().split('T')[0];
+    
+    // Check if we already ran this check today (stored in global variable)
+    if (global.lastExpiredStreamCheck === today) {
+      console.log(`Already checked for expired streams today (${today})`);
+      return;
+    }
+    
+    console.log(`Performing daily expired stream check for date: ${today}`);
+    
+    const db = require('./db/database').db;
+    
+    // Get all expired users
+    const expiredUsers = await new Promise((resolve, reject) => {
+      db.all(
+        `SELECT id FROM users 
+         WHERE is_admin = 0 
+         AND subscription_expired_at < datetime('now')`,
+        [],
+        (err, rows) => {
+          if (err) reject(err);
+          else resolve(rows || []);
+        }
+      );
+    });
+    
+    if (expiredUsers.length === 0) {
+      console.log('No expired users found');
+      // Save today's date as last check date
+      global.lastExpiredStreamCheck = today;
+      return;
+    }
+    
+    console.log(`Found ${expiredUsers.length} expired users. Stopping their active streams...`);
+    
+    // For each expired user, find and stop their active streams
+    for (const user of expiredUsers) {
+      const activeStreams = await Stream.findAll(user.id, 'live');
+      
+      if (activeStreams && activeStreams.length > 0) {
+        console.log(`Stopping ${activeStreams.length} active streams for expired user ${user.id}`);
+        
+        for (const stream of activeStreams) {
+          try {
+            // Stop the stream process
+            await streamingService.stopStream(stream.id);
+            
+            // Update stream status
+            await Stream.updateStatus(stream.id, 'offline', user.id);
+            
+            console.log(`Stopped stream ${stream.id} for expired user ${user.id}`);
+          } catch (error) {
+            console.error(`Error stopping stream ${stream.id} for user ${user.id}:`, error);
+          }
+        }
+      }
+    }
+    
+    // Save today's date as last check date
+    global.lastExpiredStreamCheck = today;
+    console.log(`Completed expired stream check for ${today}`);
+    
+  } catch (error) {
+    console.error('Error stopping streams for expired users:', error);
+  }
+}
+
+// Function to schedule the check at midnight
+function scheduleExpiredStreamCheck() {
+  // Run immediately on startup
+  stopAllStreamsForExpiredUsers();
+  
+  // Calculate time until next midnight
+  const now = new Date();
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  tomorrow.setHours(0, 0, 0, 0);
+  
+  const msUntilMidnight = tomorrow - now;
+  
+  console.log(`Scheduling next expired stream check in ${Math.round(msUntilMidnight/1000/60)} minutes (at midnight)`);
+  
+  // Schedule next check at midnight
+  setTimeout(() => {
+    stopAllStreamsForExpiredUsers();
+    // Set up daily interval after first midnight check
+    setInterval(stopAllStreamsForExpiredUsers, 24 * 60 * 60 * 1000);
+  }, msUntilMidnight);
+}

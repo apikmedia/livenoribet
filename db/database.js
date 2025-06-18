@@ -2,6 +2,7 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
 const bcrypt = require('bcrypt');
+const { v4: uuidv4 } = require('uuid');
 const dbDir = path.join(__dirname);
 if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
@@ -115,6 +116,49 @@ function checkIfUsersExist() {
       resolve(result.count > 0);
     });
   });
+}
+async function createAdminUser() {
+  try {
+    const adminId = uuidv4();
+    const hashedPassword = await bcrypt.hash('admin123', 10); // Ganti dengan password yang aman
+    
+    // Set admin expiry date (1 year from now)
+    const adminExpiry = new Date();
+    adminExpiry.setFullYear(adminExpiry.getFullYear() + 1);
+    
+    await new Promise((resolve, reject) => {
+      db.run(
+        `INSERT INTO users (
+          id, username, password, email, user_type, 
+          subscription_expired_at, max_streams, is_admin
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          adminId,
+          'admin',
+          hashedPassword,
+          'admin@example.com',
+          'premium',
+          adminExpiry.toISOString(),
+          999, // Unlimited streams for admin
+          1    // is_admin = true
+        ],
+        function(err) {
+          if (err) reject(err);
+          resolve();
+        }
+      );
+    });
+    
+    console.log('Admin user created successfully');
+    console.log('Username: admin');
+    console.log('Password: admin123');
+    console.log('Please change the password after first login!');
+    
+    process.exit(0);
+  } catch (err) {
+    console.error('Error creating admin user:', err);
+    process.exit(1);
+  }
 }
 module.exports = {
   db,
